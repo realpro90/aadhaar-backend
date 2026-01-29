@@ -97,7 +97,7 @@ def decode_secure_qr(data_bytes):
 
 @app.post("/verify")
 async def verify_aadhaar(file: UploadFile = File(...)):
-    print(f"📥 Processing: {file.filename}")
+    print(f" Processing: {file.filename}")
     
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
@@ -123,7 +123,7 @@ async def verify_aadhaar(file: UploadFile = File(...)):
                 dob = match.group(1)
                 age = calculate_exact_age(dob)
                 
-                print(f"✅ Verified: Age {age}")
+                print(f"Verified: Age {age}")
                 return {
                     "success": True, 
                     "age": age, 
