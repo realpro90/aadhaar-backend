@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
@@ -7,12 +8,26 @@ import zlib
 import re
 from datetime import datetime
 
+# --- PRIVACY & SECURITY NOTICE ---
+# This application is designed to be stateless and privacy-preserving.
+# 1. No images are written to the disk (processed in RAM only).
+# 2. No personal data (Name, DOB, Aadhaar Number) is logged or stored in a database.
+# 3. The API response returns only a boolean validation flag, not the user's specific age or DOB.
+# ---------------------------------
+
+# Configure Logging (Generic only, no sensitive data)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 
-# --- HEALTH CHECK (Required for Hugging Face/Render) ---
+# --- HEALTH CHECK ---
 @app.get("/")
 def home():
-    return {"status": "active", "message": "Aadhaar Backend Online", "docs_url": "/docs"}
+    return {"status": "active", "message": "Privacy-Preserving Age Verification Online"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,20 +36,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- HELPER FUNCTIONS ---
+# --- HELPER FUNCTIONS (Logic Preserved) ---
 
 def smart_scan(img_array):
     """
-    Scans the image using multiple high-definition strategies.
-    1. Standard Scan
-    2. Sharpened (for blurry dots)
-    3. High Contrast (for glare)
-    4. Rotated (for vertical photos)
+    Scans the image using multiple strategies (Standard, Sharpened, Contrast, Rotated).
     """
     try:
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         
-        # SAFETY CHECK: If image is corrupt, return None immediately
         if img is None:
             return None
 
@@ -52,7 +62,7 @@ def smart_scan(img_array):
         decoded = try_decode(sharpened)
         if decoded: return decoded
 
-        # 3. High Contrast (Binary Threshold)
+        # 3. High Contrast
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         decoded = decode(binary)
@@ -64,8 +74,8 @@ def smart_scan(img_array):
         if decoded: return decoded
 
         return None
-    except Exception as e:
-        print(f"Error in smart_scan: {e}")
+    except Exception:
+        # Do not log specific image processing errors to avoid leaking context
         return None
 
 def calculate_exact_age(dob_string):
@@ -92,18 +102,14 @@ def calculate_exact_age(dob_string):
         return 0
 
 def decode_secure_qr(data_bytes):
-    """
-    Handles both OLD Aadhaar (XML Text) and NEW Aadhaar (Secure Number).
-    """
+    """Decodes Aadhaar Secure QR data."""
     try:
-        # Try new secure QR (BigInt compressed)
         big_int = int(data_bytes.decode("utf-8"))
         byte_len = (big_int.bit_length() + 7) // 8
         binary_data = big_int.to_bytes(byte_len, byteorder='big')
         decompressed = zlib.decompress(binary_data, 16+zlib.MAX_WBITS)
         return decompressed.decode("latin-1")
     except:
-        # Fallback to old QR (plain text)
         return data_bytes.decode("utf-8")
 
 # --- MAIN ENDPOINT ---
@@ -111,28 +117,34 @@ def decode_secure_qr(data_bytes):
 @app.post("/verify")
 def verify_aadhaar(file: UploadFile = File(...)):
     """
-    Main verification endpoint.
-    NOTE: Removed 'async' to allow FastAPI to run this in a threadpool.
-    This prevents OpenCV from blocking the server.
+    Verifies age from Aadhaar QR.
+    Note: Synchronous definition (no 'async') ensures OpenCV runs in a 
+    threadpool to prevent server blocking.
     """
     try:
-        print(f"Processing: {file.filename}") 
+        logger.info("New verification request received.")
         
-        # Read file synchronously (faster for threadpool)
+        # Read file into memory only
         contents = file.file.read()
         nparr = np.frombuffer(contents, np.uint8)
 
+        # Process image
         decoded_objects = smart_scan(nparr)
 
+        # Clear raw image buffer from memory reference immediately
+        del contents
+        del nparr
+
         if not decoded_objects:
-            return {"success": False, "message": "No QR code detected. Try cropping exactly to the QR."}
+            logger.warning("Verification failed: No valid QR code detected.")
+            return {"success": False, "message": "No QR code detected."}
 
         for obj in decoded_objects:
             try:
-                # DECODE
+                # Decode Data
                 text_data = decode_secure_qr(obj.data)
                 
-                # Regex for DD-MM-YYYY or YYYY-MM-DD
+                # Regex for Date of Birth
                 match = re.search(r"([0-9]{2}-[0-9]{2}-[0-9]{4})", text_data)
                 if not match:
                     match = re.search(r"([0-9]{4}-[0-9]{2}-[0-9]{2})", text_data)
@@ -141,20 +153,21 @@ def verify_aadhaar(file: UploadFile = File(...)):
                     dob = match.group(1)
                     age = calculate_exact_age(dob)
                     
-                    print(f"Verified: Age {age}")
+                    # LOGIC CHECK ONLY - NO LOGGING OF AGE
+                    logger.info("QR decoded successfully. Age calculated internally.")
 
                     return {
                         "success": True, 
-                        "age": age, 
-                        "is_under_18": age < 18,
-                        "dob": dob
+                        "is_under_18": age < 18
                     }
                 
-            except Exception as e:
-                print(f"Error processing QR data: {e}")
+            except Exception:
+                logger.error("Error parsing QR data structure.")
+                continue
 
-        return {"success": False, "message": "QR found, but could not read DOB."}
+        logger.info("Verification failed: QR found but DOB unreadable.")
+        return {"success": False, "message": "Could not verify age from this QR."}
 
-    except Exception as e:
-        print(f"Critical Error: {e}")
-        return {"success": False, "message": "Server error processing image."}
+    except Exception:
+        logger.error("Internal server error during verification.")
+        return {"success": False, "message": "Internal processing error."}
