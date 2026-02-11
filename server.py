@@ -10,12 +10,11 @@ from datetime import datetime
 
 # --- PRIVACY & SECURITY NOTICE ---
 # This application is designed to be stateless and privacy-preserving.
-# 1. No images are written to the disk (processed in RAM only).
-# 2. No personal data (Name, DOB, Aadhaar Number) is logged or stored in a database.
-# 3. The API response returns only a boolean validation flag, not the user's specific age or DOB.
+# No images are written to the disk (processed in RAM only).
+# No personal data (Name, DOB, Aadhaar Number) is logged or stored in a database.
+# The API response returns only a boolean validation flag, not the user's specific age or DOB.
 # ---------------------------------
 
-# Configure Logging (Generic only, no sensitive data)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -36,7 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- HELPER FUNCTIONS (Logic Preserved) ---
 
 def smart_scan(img_array):
     """
@@ -52,17 +50,13 @@ def smart_scan(img_array):
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             return decode(gray)
         
-        # 1. Standard
         decoded = try_decode(img)
         if decoded: return decoded
 
-        # 2. Sharpened
         gaussian = cv2.GaussianBlur(img, (0, 0), 3)
         sharpened = cv2.addWeighted(img, 1.5, gaussian, -0.5, 0)
         decoded = try_decode(sharpened)
         if decoded: return decoded
-
-        # 3. High Contrast
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         decoded = decode(binary)
@@ -75,7 +69,6 @@ def smart_scan(img_array):
 
         return None
     except Exception:
-        # Do not log specific image processing errors to avoid leaking context
         return None
 
 def calculate_exact_age(dob_string):
@@ -112,7 +105,6 @@ def decode_secure_qr(data_bytes):
     except:
         return data_bytes.decode("utf-8")
 
-# --- MAIN ENDPOINT ---
 
 @app.post("/verify")
 def verify_aadhaar(file: UploadFile = File(...)):
@@ -124,14 +116,11 @@ def verify_aadhaar(file: UploadFile = File(...)):
     try:
         logger.info("New verification request received.")
         
-        # Read file into memory only
         contents = file.file.read()
         nparr = np.frombuffer(contents, np.uint8)
 
-        # Process image
         decoded_objects = smart_scan(nparr)
 
-        # Clear raw image buffer from memory reference immediately
         del contents
         del nparr
 
@@ -141,10 +130,8 @@ def verify_aadhaar(file: UploadFile = File(...)):
 
         for obj in decoded_objects:
             try:
-                # Decode Data
                 text_data = decode_secure_qr(obj.data)
                 
-                # Regex for Date of Birth
                 match = re.search(r"([0-9]{2}-[0-9]{2}-[0-9]{4})", text_data)
                 if not match:
                     match = re.search(r"([0-9]{4}-[0-9]{2}-[0-9]{2})", text_data)
@@ -153,7 +140,6 @@ def verify_aadhaar(file: UploadFile = File(...)):
                     dob = match.group(1)
                     age = calculate_exact_age(dob)
                     
-                    # LOGIC CHECK ONLY - NO LOGGING OF AGE
                     logger.info("QR decoded successfully. Age calculated internally.")
 
                     return {
